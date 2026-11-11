@@ -6,7 +6,7 @@ from src.config.database import engine
 from src.config.settings import SEED_DEMO,REDIS_URL
 from src.middlewares.errors import ErrorMiddleware
 from src.middlewares.audit import AuditMiddleware
-from src.routes import auth,datasets,comparisons,runs,reviews,reports,audit
+from src.routes import auth, datasets, revisions, comparisons, runs, reviews, reports, audit
 @asynccontextmanager
 async def lifespan(app):
  if SEED_DEMO:
@@ -17,7 +17,8 @@ async def lifespan(app):
  yield
 app=FastAPI(title="沐禾 · 用水结构贡献拆解",lifespan=lifespan)
 app.add_middleware(AuditMiddleware);app.add_middleware(ErrorMiddleware)
-for module in (auth,datasets,comparisons,runs,reviews,reports,audit):app.include_router(module.router)
+for module in (auth, datasets, revisions, comparisons, runs, reviews, reports, audit):
+    app.include_router(module.router)
 @app.get("/health")
 def health():
  with engine.connect() as db:db.execute(text("SELECT 1"))

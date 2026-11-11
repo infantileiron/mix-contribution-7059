@@ -26,11 +26,13 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 五服务frontend/backend/worker/db/redis恰好各一，全部healthcheck。backend依赖PG/Redis健康，worker再等待backend种子完成，frontend等待backend。三命名卷保存PG、Redis AOF和worker心跳产物。结束演示执行 `docker compose down -v --remove-orphans`，会清除本项目演示数据。
 
-SEED_DEMO=true首次建表并填充，固定ID/自然键查重，重跑不会新增或覆盖用户修改。种子由固定seed2209生成2024-11至2026-10的24月×8分区，含真实计算完成的2026-09→10月对照与复核归档。8分区为研发东区、研发西区、试制中心、装配区、后勤区、培训楼、配套区、检验区。所有数据仅为模拟。
+SEED_DEMO=true首次建表并填充，固定ID/自然键查重，重跑不会新增或覆盖用户修改。种子由固定seed2209生成2024-11至2026-10的24月×8分区，含真实计算完成的2026-09→10月对照与复核归档，并内置一条v1→v2的水表复核修订（装配区10月水量+3.2%）用于演示版本追溯，演示运行锁定v2快照。8分区为研发东区、研发西区、试制中心、装配区、后勤区、培训楼、配套区、检验区。所有数据仅为模拟。
 
 ## 实体与功能
 
-ConsumptionDataset保存月份/分区/规模/用水；PeriodComparison固定数据集和两期；DecompositionRun由Redis队列驱动并持久化状态、结果、校验码；DriverReview保留人工判断与解释边界；PublishedReport仅在最新复核为accepted后由admin批准，run唯一。操作留痕记录操作者、接口、状态和时间，不保存密码、令牌或数据正文。
+ConsumptionDataset保存月份/分区/规模/用水与`current_version`当前版本号；ObservationRevision保存每次水表复核修订的原因、操作者、版本基线、逐条前后值与校验码。PeriodComparison固定数据集和两期；DecompositionRun由Redis队列驱动并持久化状态、结果、校验码，以及排队时锁定的`dataset_version`和`dataset_snapshot`观测快照；DriverReview保留人工判断、解释边界与复核时的观测版本；PublishedReport仅在最新复核为accepted且版本为当前版后由admin批准，run唯一。操作留痕记录操作者、接口、状态和时间，不保存密码、令牌或数据正文。
+
+**观测修订与版本锁定**：分区观测页支持直接修订已导入的月度观测（无需另建观测集），必须填写修订原因。修订采用乐观并发控制，请求带`base_version`；两人同时基于同一版本提交时，后提交者收到409冲突并提示刷新。每次修订使`current_version`加一，修订历史可逐条追溯前后值与新旧校验码，页面可在当前版本与任意历史版本之间切换，历史版本为只读并高亮已修订分区。分解运行在排队瞬间锁定观测版本并冻结行快照：已排队和已归档的结果始终按旧快照计算与追溯，贡献CSV同样绑定运行自身的旧数据；观测修订后可用「用最新观测重算」生成新版本运行，新旧运行在贡献拆解、两期对照和驱动复核页分别标注当前/历史。旧版本运行的复核不能批准新版报告（后端409、前端隐藏批准入口并提示重算）；已归档报告在后续修订后仍可下载，内容保持归档时的数据不变。
 
 六业务页：年鉴总览、分区观测、两期对照、贡献拆解、驱动复核、操作留痕。两方法可切换瀑布图与逐区贡献，另外展示实际规模/占比/强度、占比和与科学记数法闭合残差。观测页按月份完整展示当月所有分区；空状态提示下一步、错误可以修正重试，提供768/390响应式布局。
 
@@ -44,7 +46,7 @@ ConsumptionDataset保存月份/分区/规模/用水；PeriodComparison固定数�
 
 输出包含基期/报告期水量与规模、两期占比和、总变化、两方法三因子贡献、逐区贡献与闭合残差 `ΔQ-Σ贡献`。浮点残差保留原值，不强行修正为0；前端只负责画真实结果，不在浏览器重新计算贡献。
 
-可复现：相同观测JSON校验码与两期月份给出确定性结果，两算法没有随机参数。输入最多5000条，每个规模/水量≤10亿。导入拒绝0/负/非有限值及重复分区月份；对照拒绝空月份、错区、相同月份；计算再次校验。队列异常和运行错误保留可见状态，可重新创建运行。
+可复现：相同观测JSON校验码与两期月份给出确定性结果，两算法没有随机参数。输入最多5000条，每个规模/水量≤10亿。导入拒绝0/负/非有限值及重复分区月份；修订同样拒绝0/负/非有限值，且只允许修正已存在的分区月份、必须产生真实数值变化；对照拒绝空月份、错区、相同月份；计算再次校验。队列异常和运行错误保留可见状态，可重新创建运行。修订后重算的运行在结果中携带锁定版本的校验码，与运行快照一一对应。
 
 ## 技术与开发
 
@@ -55,7 +57,7 @@ ConsumptionDataset保存月份/分区/规模/用水；PeriodComparison固定数�
 |持久化|PostgreSQL16|
 |队列|Redis7.4持久化列表、独立Python worker|
 
-frontend/src包含api、stores、types、components/common、hooks、pages、router、utils、constants；backend/src包含routes、controllers、services、models、schemas、middlewares、utils、constants、config；backend/scripts为seed，backend/migrations说明初次模型建表。源码不含截图/日志/TESTING，这些在批次test-artifacts/gb-2209。
+frontend/src包含api、stores、types、components/common、hooks、pages、router、utils、constants；backend/src包含routes、controllers、services、models、schemas、middlewares、utils、constants、config；backend/scripts为seed，backend/migrations含初次建表说明与002观测修订版本列的ALTER脚本。源码不含截图/日志/TESTING，这些在批次test-artifacts/gb-2209。
 
 本地后端：安装requirements.txt，配置DATABASE_URL/REDIS_URL/JWT_SECRET，在backend执行`uvicorn src.main:app --reload`，另开`python -m src.worker`。前端：`npm ci && npm run dev`；开发时为/api配置指向19218的同源反向代理，Docker默认Nginx已处理前缀。锁文件固定构建依赖，Docker使用npm ci。
 

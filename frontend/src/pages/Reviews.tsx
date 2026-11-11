@@ -1,1 +1,120 @@
-import {useState} from 'react';import type {Workspace} from '../stores/workspace';import {PageHeading} from '../components/common/PageHeading';import {Notice} from '../components/common/Notice';import {Empty} from '../components/common/Empty';import {create as review} from '../api/reviews';import {create as report} from '../api/reports';import {downloadReport} from '../api/client';import {useAsync} from '../hooks/useAsync';import {DECISIONS} from '../constants/enums';import {date} from '../utils/format';export function Reviews({data,canWrite,isAdmin,refresh}:{data:Workspace;canWrite:boolean;isAdmin:boolean;refresh:()=>Promise<void>}){const [id,setId]=useState(''),[note,setNote]=useState(''),[decision,setDecision]=useState('accepted');const completed=data.runs.filter(r=>r.status==='completed');const task=useAsync();return <><PageHeading label="05 / DRIVER REVIEW" title="先复核驱动，再写进年鉴。">记录分区对齐、规模口径与解释局限。<br/>管理员确认最新复核为接受后归档。</PageHeading>{canWrite&&<section className="paper"><h2>提交驱动复核</h2><form className="grid-form" onSubmit={e=>{e.preventDefault();task.execute(async()=>{await review({run_id:id||completed[0]?.id,note,decision});setNote('');await refresh()})}}><label>已完成分解<select aria-label="复核分解记录" value={id||completed[0]?.id||''} onChange={e=>setId(e.target.value)}>{completed.map(r=><option key={r.id} value={r.id}>{data.comparisons.find(c=>c.id===r.comparison_id)?.name} · {r.created_at.slice(11,19)}</option>)}</select></label><label>复核判断<select value={decision} onChange={e=>setDecision(e.target.value)}><option value="accepted">接受并记录口径</option><option value="needs_attention">需继续核查</option></select></label><label className="wide">依据与解释边界<textarea aria-label="依据与解释边界" rows={3} required minLength={8} value={note} onChange={e=>setNote(e.target.value)} placeholder="请核对两期分区、单位、人日口径和闭合残差，并说明不作因果解释。"/></label><button disabled={task.busy||!completed.length}>提交驱动复核</button></form></section>}{task.error&&<Notice error>{task.error}</Notice>}<section className="paper"><h2>复核记录</h2>{data.reviews.length?data.reviews.map(r=><article key={r.id} className="review-record"><div><span className={'status '+r.decision}>{DECISIONS[r.decision]}</span><small>{r.author} · {date(r.created_at)}</small></div><p>{r.note}</p>{isAdmin&&r.decision==='accepted'&&!data.reports.some(p=>p.run_id===r.run_id)&&<button className="secondary" disabled={task.busy} onClick={()=>task.execute(async()=>{await report({run_id:r.run_id,title:'用水驱动人工复核 · '+r.created_at.slice(0,10)});await refresh()})}>批准并归档</button>}</article>):<Empty>完成分解后，记录驱动解释与口径边界再提交。</Empty>}</section><section className="paper"><h2>年鉴归档</h2>{data.reports.map(p=><article className="report-row" key={p.id}><div><h3>{p.title}</h3><small>{date(p.created_at)} · {p.published_by}</small></div><button className="secondary" onClick={()=>task.execute(()=>downloadReport(p.id))}>下载CSV　↓</button></article>)}</section></>}
+import {useState} from 'react';
+import type {Workspace} from '../stores/workspace';
+import {PageHeading} from '../components/common/PageHeading';
+import {Notice} from '../components/common/Notice';
+import {Empty} from '../components/common/Empty';
+import {create as review} from '../api/reviews';
+import {create as report} from '../api/reports';
+import {recompute} from '../api/runs';
+import {downloadReport} from '../api/client';
+import {useAsync} from '../hooks/useAsync';
+import {DECISIONS} from '../constants/enums';
+import {date} from '../utils/format';
+
+export function Reviews({data, canWrite, isAdmin, refresh}: {
+  data: Workspace; canWrite: boolean; isAdmin: boolean; refresh: () => Promise<void>;
+}) {
+  const [id, setId] = useState('');
+  const [note, setNote] = useState('');
+  const [decision, setDecision] = useState('accepted');
+  const completed = data.runs.filter(r => r.status === 'completed');
+  const task = useAsync();
+  const runById = (runId: string) => data.runs.find(r => r.id === runId);
+
+  return <>
+    <PageHeading label="05 / DRIVER REVIEW" title="先复核驱动，再写进年鉴。">
+      记录分区对齐、规模口径与解释局限。<br/>
+      复核绑定提交时的观测版本；旧版本复核不能批准新版本报告。
+    </PageHeading>
+
+    {canWrite && <section className="paper">
+      <h2>提交驱动复核</h2>
+      <form className="grid-form" onSubmit={e => {
+        e.preventDefault();
+        task.execute(async () => {
+          await review({run_id: id || completed[0]?.id, note, decision});
+          setNote('');
+          await refresh();
+        });
+      }}>
+        <label>已完成分解
+          <select aria-label="复核分解记录" value={id || completed[0]?.id || ''} onChange={e => setId(e.target.value)}>
+            {completed.map(r => <option key={r.id} value={r.id}>
+              {data.comparisons.find(c => c.id === r.comparison_id)?.name} · v{r.dataset_version}
+              {r.is_stale ? '（历史）' : '（当前）'} · {r.created_at.slice(11, 19)}
+            </option>)}
+          </select>
+        </label>
+        <label>复核判断
+          <select value={decision} onChange={e => setDecision(e.target.value)}>
+            <option value="accepted">接受并记录口径</option>
+            <option value="needs_attention">需继续核查</option>
+          </select>
+        </label>
+        <label className="wide">依据与解释边界
+          <textarea aria-label="依据与解释边界" rows={3} required minLength={8} value={note}
+                    onChange={e => setNote(e.target.value)}
+                    placeholder="请核对两期分区、单位、人日口径和闭合残差，并说明不作因果解释。"/>
+        </label>
+        <button disabled={task.busy || !completed.length}>提交驱动复核</button>
+      </form>
+    </section>}
+
+    {task.error && <Notice error>{task.error}</Notice>}
+
+    <section className="paper">
+      <h2>复核记录</h2>
+      {data.reviews.length ? data.reviews.map(r => {
+        const run = runById(r.run_id);
+        const stale = run ? run.is_stale : false;
+        const alreadyPublished = data.reports.some(p => p.run_id === r.run_id);
+        return <article key={r.id} className="review-record">
+          <div>
+            <span className={'status ' + r.decision}>{DECISIONS[r.decision]}</span>
+            <small>
+              {r.author} · {date(r.created_at)} ·
+              <span className={'version-badge ' + (stale ? 'history' : 'current')}>观测 v{r.dataset_version}{stale ? ' · 历史' : ' · 当前'}</span>
+            </small>
+          </div>
+          <p>{r.note}</p>
+          {stale && r.decision === 'accepted' && (
+            <Notice error>
+              该复核基于第{r.dataset_version}版历史观测，当前已是第{run?.current_dataset_version}版，
+              旧版复核不能批准新版报告；请用最新观测重算并重新复核。
+            </Notice>
+          )}
+          {stale && canWrite && (
+            <button className="secondary" disabled={task.busy}
+                    onClick={() => task.execute(async () => {
+                      await recompute(r.run_id);
+                      await refresh();
+                    })}>用最新观测重算分解　→</button>
+          )}
+          {isAdmin && r.decision === 'accepted' && !stale && !alreadyPublished && (
+            <button className="secondary" disabled={task.busy}
+                    onClick={() => task.execute(async () => {
+                      await report({run_id: r.run_id, title: '用水驱动人工复核 · ' + r.created_at.slice(0, 10)});
+                      await refresh();
+                    })}>批准并归档</button>
+          )}
+        </article>;
+      }) : <Empty>完成分解后，记录驱动解释与口径边界再提交。</Empty>}
+    </section>
+
+    <section className="paper">
+      <h2>年鉴归档</h2>
+      {data.reports.length ? data.reports.map(p => {
+        const run = runById(p.run_id);
+        return <article className="report-row" key={p.id}>
+          <div>
+            <h3>{p.title}</h3>
+            <small>{date(p.created_at)} · {p.published_by} ·
+              <span className="version-badge history">归档观测 v{run?.dataset_version ?? '—'}</span>
+            </small>
+          </div>
+          <button className="secondary" onClick={() => task.execute(() => downloadReport(p.id))}>下载CSV　↓</button>
+        </article>;
+      }) : <Empty>最新版本的接受复核经管理员批准后在此归档。</Empty>}
+    </section>
+  </>;
+}

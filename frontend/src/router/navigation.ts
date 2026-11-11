@@ -1,0 +1,1 @@
+export const navigation=[{id:'overview',label:'年鉴总览',code:'01'},{id:'datasets',label:'分区观测',code:'02'},{id:'comparisons',label:'两期对照',code:'03'},{id:'results',label:'贡献拆解',code:'04'},{id:'reviews',label:'驱动复核',code:'05'},{id:'audit',label:'操作留痕',code:'06'}];
